@@ -3,6 +3,7 @@
 # 初始化全局变量
 URL_YOUTUBE=$(echo -e "$1")
 if [[ -z $2 ]]; then DL_FOLDER=`pwd`; else DL_FOLDER="$2"; fi
+if [[ -z $3 ]]; then THREAD_NUMBER=10; else THREAD_NUMBER=$3; fi
 PROXY_ENABLED=no
 PROXY='socks5h://127.0.0.1:24456'
 
@@ -440,7 +441,7 @@ function youtube_select_video() {
 
     # get url list
     echo "VIDEO\\t\\c" >>${SELECTED_URL}
-    cat "${YOUTUBE_DL_LIST}" | sed -n "${VIDEO_SELECT}p" >>${SELECTED_URL}
+    cat "${YOUTUBE_DL_LIST}" | grep "^${VIDEO_SELECT}[ ]*" >>${SELECTED_URL}
 
     # select audio
     echo -e "请选择你要下载的音频"
@@ -454,7 +455,7 @@ function youtube_select_video() {
         exit
     fi
     SELECTED_RATE=$(cat "${YOUTUBE_DL_LIST}" | awk '{if($2~"audio") print $0}' \
-        | grep "^${AUDIO_SELECT}[ ]*"| awk '{print $5}')
+        | grep "^${AUDIO_SELECT}[ ]*" | awk '{print $5}')
     if [[ -z "${SELECTED_RATE}" ]]; then
         echo -e "无效的选择"
         exit
@@ -463,7 +464,7 @@ function youtube_select_video() {
 
     # get url list
     echo "AUDIO\\t\\c" >>${SELECTED_URL}
-    cat "${YOUTUBE_DL_LIST}" | sed -n "${AUDIO_SELECT}p" >>${SELECTED_URL}
+    cat "${YOUTUBE_DL_LIST}" | grep "^${AUDIO_SELECT}[ ]*"  >>${SELECTED_URL}
 
 }
 
@@ -701,6 +702,7 @@ function ffmpeg_env() {
 function youtube_download() {
     local URL_YOUTUBE="$1"
     local DL_FOLDER="$2"
+    local THREAD_NUMBER=$3
     local DL_URL
     local BITRATES
     local MIME_TYPE
@@ -726,7 +728,7 @@ function youtube_download() {
     MIME_TYPE=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"video") print $0}' | awk '{print $2}')
     FILE_EXT=$(grep "${MIME_TYPE}" "${TEMP_DIR}/file_ext_map.txt" | awk '{print $(NF)}')
     FILE_NAME_VIDEO="${DL_FOLDER}/$(cat "${TEMP_DIR}/video_title.txt")_${BITRATES}${FILE_EXT}"
-    youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_VIDEO}" 10
+    youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_VIDEO}" "${THREAD_NUMBER}"
 
     echo "开始下载音频文件"
     DL_URL=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"audio") print $0}' \
@@ -735,7 +737,7 @@ function youtube_download() {
     MIME_TYPE=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"audio") print $0}' | awk '{print $2}')
     FILE_EXT=$(grep "${MIME_TYPE}" "${TEMP_DIR}/file_ext_map.txt" | awk '{print $(NF)}')
     FILE_NAME_AUDIO="${DL_FOLDER}/$(cat "${TEMP_DIR}/video_title.txt")_${BITRATES}${FILE_EXT}"
-    youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_AUDIO}" 10
+    youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_AUDIO}" "${THREAD_NUMBER}"
     # cat info.txt | tr '\r' '\n' | sed "s/[ ][ ]*/\ /g" | grep "k$\|m$\|[0-9]$"
 
     # 合并转换音视频
@@ -751,4 +753,4 @@ function youtube_download() {
 
 }
 
-youtube_download "${URL_YOUTUBE}" "${DL_FOLDER}"
+youtube_download "${URL_YOUTUBE}" "${DL_FOLDER}" "${THREAD_NUMBER}"
