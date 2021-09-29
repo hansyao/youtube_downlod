@@ -5,8 +5,7 @@ URL_YOUTUBE=$(echo -e "$1")
 if [[ -z $2 ]]; then DL_FOLDER=`pwd`; else DL_FOLDER="$2"; fi
 if [[ -z $3 ]]; then THREAD_NUMBER=10; else THREAD_NUMBER=$3; fi
 PROXY_ENABLED=no
-PROXY='socks5h://127.0.0.1:24456'
-
+PROXY='socks5h://127.0.0.1:23456'
 
 TEMP_DIR='/tmp/tmp_youtube'
 RAW_PAGE="${TEMP_DIR}/youtube_raw_page.html"
@@ -225,36 +224,17 @@ function json_main() {
 function get_json_from_file() {
 	local SOURCE_FILE_NAME=$1
 	local START_POSITION=$2
+    local YOUTUBE_JSON=$3
 	local TEMP_DIR=${TEMP_DIR}
-	local i=0
-	local j=0
-	local n=1
 
 	# trim left from START_POSITION
 	cat "${SOURCE_FILE_NAME}" | tr '\n|\r' ' ' | awk -F "${START_POSITION}" '{print $(NF)}' \
 		| sed "s/^[ ][ ]*\|^[\t][\t]*//g" >"${TEMP_DIR}/source_trim_left.txt"
 
 	# get END_POSITION
-	while read -r -N 1 CHAR
-	do
-		if [[ ${CHAR} == '{' ]]; then
-			let i++
-		fi
-		if [[ ${CHAR} == '}' ]]; then
-			let j++
-		fi
+    cat "${TEMP_DIR}/source_trim_left.txt" | jq  2>/dev/null >"${YOUTUBE_JSON}"
 
-		if [[ ${i} -eq ${j} && ${i} -ne 0 ]]; then
-			break
-		fi
-
-		let n++
-	done < "${TEMP_DIR}/source_trim_left.txt"
-	if [[ ${i} -ne ${j} ]]; then
-		echo "json 获取失败"
-		return 1
-	fi
-	cat "${TEMP_DIR}/source_trim_left.txt" | cut -c -${n}
+    if [[ $(cat "${YOUTUBE_JSON}" | wc -l) -gt 0 ]]; then return 0; else return 1; fi
 }
 
 function urldecode() {
@@ -335,7 +315,11 @@ function youtube_parse() {
     fi
 
     # 获取Youtube视频播放页面并解析直连地址
-    curl --retry 3 --connect-timeout 5 --compressed -L -s -x "${PROXY}" -H @"${HEADER}" "${URL_YOUTUBE}" -o "${RAW_PAGE}"
+    if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
+        curl --retry 3 --connect-timeout 5 -L -s -x "${PROXY}" -H @"${HEADER}" "${URL_YOUTUBE}" -o "${RAW_PAGE}"
+    else
+        curl --retry 3 --connect-timeout 5 -L -s -H @"${HEADER}" "${URL_YOUTUBE}" -o "${RAW_PAGE}"
+    fi
 
     if [[ -e "${RAW_PAGE}" ]]; then
         if [[ $(cat "${RAW_PAGE}" | wc -l) -gt 1 ]]; then
@@ -351,7 +335,7 @@ function youtube_parse() {
 
     echo -e "开始解析视频信息"
     START_POSITION='var ytInitialPlayerResponse ='    #页面json标志位 
-    get_json_from_file "${RAW_PAGE}" "${START_POSITION}" >"${YOUTUBE_JSON}"
+    get_json_from_file "${RAW_PAGE}" "${START_POSITION}" "${YOUTUBE_JSON}"
     if [[ $? -ne 0 ]]; then exit; fi
 
     # 获取视频名称和简介
@@ -507,8 +491,13 @@ function youtube_multi_thread_download() {
     mkdir -p "${SPLIT_LOG_FOLDER}"
 
 	# get file size_download
-    RESPONSE_HEADER=$(curl --retry 5 -L -s -H @"${HEADER}" -X HEAD -I --connect-timeout 10  ${REMOTE_FILE} \
-        | tr '\r' '\n' | grep -v "^$" | sed "s/^[ ]//g" | sed "s/[ ]$//g")
+    if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
+        RESPONSE_HEADER=$(curl -x "${PROXY}" --retry 5 -L -s -H @"${HEADER}" -X HEAD -I --connect-timeout 10  ${REMOTE_FILE} \
+            | tr '\r' '\n' | grep -v "^$" | sed "s/^[ ]//g" | sed "s/[ ]$//g")
+    else
+        RESPONSE_HEADER=$(curl --retry 5 -L -s -H @"${HEADER}" -X HEAD -I --connect-timeout 10  ${REMOTE_FILE} \
+            | tr '\r' '\n' | grep -v "^$" | sed "s/^[ ]//g" | sed "s/[ ]$//g")
+    fi
     CONTENT_TYPE=$(echo -e "${RESPONSE_HEADER}" | grep -i "^Content-Type" \
         | tail -n 1 | awk '{print $(NF)}' | sed "s/^[ ]//g" | sed "s/[ ]$//g")
     TOTAL_SIZE=$(echo -e "${RESPONSE_HEADER}" | grep -i "^content-length" \
@@ -534,9 +523,16 @@ function youtube_multi_thread_download() {
 			MAX_RANGE=${TOTAL_SIZE}
 		fi
 
-		curl --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
-            -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
-            -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
+        if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
+		    curl -x "${PROXY}" --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
+                -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
+                -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
+        else
+		    curl --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
+                -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
+                -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
+        fi
+
 		}&
 
         # check whether block create succesfully
@@ -561,17 +557,17 @@ function youtube_multi_thread_download() {
         # check download progress
         {
         b=''
-        j=0
-        m=0
-        n=0
-        DL_SPEED=0
-        retry=1
+        j=0     # download percentage
+        m=0     # download percentage (previously)
+        n=0     # waiting seconds
+        retry=1 # 重试
+        DL_SPEED=0  # download speed
         while :
         do
             if [[ ${n} -gt 60 ]]; then
                 kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
                 if [[ $? -eq 0 ]]; then
-                    # echo -e "block[${i}]超时 ${n} 秒, 继续等待...\r"
+                    # 只要 curl 进程未退出则轮询等待"
                     sleep 1
                     n=0
                     continue
@@ -585,21 +581,28 @@ function youtube_multi_thread_download() {
                 | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
                 | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $1}')
             if [[ $? -ne 0 ]]; then
-                sleep 1
-                let n++
-                continue
+                # log日志存在，则判断curl进程是否退出，未退出则轮询等待
+                kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
+                if [[ $? -eq 0 ]]; then
+                    sleep 1
+                    let n++
+                    continue
+                fi
             fi
 
             DL_SPEED=$(cat "${SPLIT_LOG_FOLDER}/${i}.log" 2>/dev/null \
                 | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
                 | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $(NF) "/s"}')
 
-
             if [[ ${j} -eq ${m} ]]; then
-                sleep 1
-
-                let n++
-                continue
+                # 如下载进度没有变化，则轮询等待
+                kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
+                if [[ $? -eq 0 ]]; then
+                    # 只要 curl 进程未退出则轮询等待"
+                    sleep 1
+                    n=0
+                    continue
+                fi
             fi
             b='#'${b}
             m=${j}
@@ -624,8 +627,20 @@ function youtube_multi_thread_download() {
                     printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
                     break
                 else
-                    echo "block [${i}] 下载不完全"
-                    break
+                    echo "block [${i}] 下载不完全，重试【${retry}】"
+                    rm -f "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}"
+                    if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
+                        curl -x "${PROXY}" --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
+                            -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
+                            -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
+                    else
+                        curl --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
+                            -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
+                            -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
+                    fi
+                    echo "$!" >"${PID_FOLDER}/${i}.pid"
+                    n=0
+                    let retry++
                 fi
             fi
 
