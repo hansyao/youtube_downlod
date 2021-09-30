@@ -4,222 +4,12 @@
 URL_YOUTUBE=$(echo -e "$1")
 if [[ -z $2 ]]; then DL_FOLDER=`pwd`; else DL_FOLDER="$2"; fi
 if [[ -z $3 ]]; then THREAD_NUMBER=10; else THREAD_NUMBER=$3; fi
-PROXY_ENABLED=no
-PROXY='socks5h://127.0.0.1:23456'
+PROXY_ENABLED=yes
+PROXY='socks5h://192.168.50.1:23456'
 
 TEMP_DIR='/tmp/tmp_youtube'
 RAW_PAGE="${TEMP_DIR}/youtube_raw_page.html"
 YOUTUBE_JSON="${TEMP_DIR}/youtube.json"
-
-
-function json_parse_env() {
-    BRIEF=0
-    LEAFONLY=0
-    PRUNE=0
-    NO_HEAD=0
-    NORMALIZE_SOLIDUS=0
-}
-
-function json_throw() {
-  echo "$*" >&2
-  exit 1
-}
-
-function json_parse_usage() {
-    echo
-    echo "Usage: JSON.sh [-b] [-l] [-p] [-s] [-h]"
-    echo
-    echo "-p - Prune empty. Exclude fields with empty values."
-    echo "-l - Leaf only. Only show leaf nodes, which stops data duplication."
-    echo "-b - Brief. Combines 'Leaf only' and 'Prune empty' options."
-    echo "-n - No-head. Do not show nodes that have no path (lines that start with [])."
-    echo "-s - Remove escaping of the solidus symbol (straight slash)."
-    echo "-h - This help text."
-    echo
-}
-
-function json_parse_options() {
-    set -- "$@"
-    local ARGN=$#
-    while [ "$ARGN" -ne 0 ]
-    do
-    case $1 in
-        -h) json_parse_usage
-            exit 0
-        ;;
-        -b) BRIEF=1
-            LEAFONLY=1
-            PRUNE=1
-        ;;
-        -l) LEAFONLY=1
-        ;;
-        -p) PRUNE=1
-        ;;
-        -n) NO_HEAD=1
-        ;;
-        -s) NORMALIZE_SOLIDUS=1
-        ;;
-        ?*) echo "ERROR: Unknown option."
-            json_parse_usage
-            exit 0
-        ;;
-    esac
-    shift 1
-    ARGN=$((ARGN-1))
-    done
-}
-
-function json_awk_egrep () {
-    local pattern_string=$1
-
-    gawk '{
-    while ($0) {
-        start=match($0, pattern);
-        token=substr($0, start, RLENGTH);
-        print token;
-        $0=substr($0, start+RLENGTH);
-    }
-    }' pattern="$pattern_string"
-}
-
-function json_tokenize () {
-    local GREP
-    local ESCAPE
-    local CHAR
-
-    if echo "test string" | egrep -ao --color=never "test" >/dev/null 2>&1
-    then
-    GREP='egrep -ao --color=never'
-    else
-    GREP='egrep -ao'
-    fi
-
-    if echo "test string" | egrep -o "test" >/dev/null 2>&1
-    then
-    ESCAPE='(\\[^u[:cntrl:]]|\\u[0-9a-fA-F]{4})'
-    CHAR='[^[:cntrl:]"\\]'
-    else
-    GREP=json_awk_egrep
-    ESCAPE='(\\\\[^u[:cntrl:]]|\\u[0-9a-fA-F]{4})'
-    CHAR='[^[:cntrl:]"\\\\]'
-    fi
-
-    local STRING="\"$CHAR*($ESCAPE$CHAR*)*\""
-    local NUMBER='-?(0|[1-9][0-9]*)([.][0-9]*)?([eE][+-]?[0-9]*)?'
-    local KEYWORD='null|false|true'
-    local SPACE='[[:space:]]+'
-
-    # Force zsh to expand $A into multiple words
-    local is_wordsplit_disabled=$(unsetopt 2>/dev/null | grep -c '^shwordsplit$')
-    if [ $is_wordsplit_disabled != 0 ]; then setopt shwordsplit; fi
-    $GREP "$STRING|$NUMBER|$KEYWORD|$SPACE|." | egrep -v "^$SPACE$"
-    if [ $is_wordsplit_disabled != 0 ]; then unsetopt shwordsplit; fi
-}
-
-function json_parse_array () {
-    local index=0
-    local ary=''
-    read -r token
-    case "$token" in
-    ']') ;;
-    *)
-        while :
-        do
-        json_parse_value "$1" "$index"
-        index=$((index+1))
-        ary="$ary""$value" 
-        read -r token
-        case "$token" in
-            ']') break ;;
-            ',') ary="$ary," ;;
-            *) json_throw "EXPECTED , or ] GOT ${token:-EOF}" ;;
-        esac
-        read -r token
-        done
-        ;;
-    esac
-    [ "$BRIEF" -eq 0 ] && value=$(printf '[%s]' "$ary") || value=
-    :
-}
-
-function json_parse_object () {
-    local key
-    local obj=''
-    read -r token
-    case "$token" in
-    '}') ;;
-    *)
-        while :
-        do
-        case "$token" in
-            '"'*'"') key=$token ;;
-            *) json_throw "EXPECTED string GOT ${token:-EOF}" ;;
-        esac
-        read -r token
-        case "$token" in
-            ':') ;;
-            *) json_throw "EXPECTED : GOT ${token:-EOF}" ;;
-        esac
-        read -r token
-        json_parse_value "$1" "$key"
-        obj="$obj$key:$value"        
-        read -r token
-        case "$token" in
-            '}') break ;;
-            ',') obj="$obj," ;;
-            *) json_throw "EXPECTED , or } GOT ${token:-EOF}" ;;
-        esac
-        read -r token
-        done
-    ;;
-    esac
-    [ "$BRIEF" -eq 0 ] && value=$(printf '{%s}' "$obj") || value=
-    :
-}
-
-function json_parse_value () {
-    local jpath="${1:+$1,}$2" isleaf=0 isempty=0 print=0
-    
-    case "$token" in
-    '{') json_parse_object "$jpath" ;;
-    '[') json_parse_array  "$jpath" ;;
-    # At this point, the only valid single-character tokens are digits.
-    ''|[!0-9]) json_throw "EXPECTED value GOT ${token:-EOF}" ;;
-    *) value=$token
-        # if asked, replace solidus ("\/") in json strings with normalized value: "/"
-        [ "$NORMALIZE_SOLIDUS" -eq 1 ] && value=$(echo "$value" | sed 's#\\/#/#g')
-        isleaf=1
-        [ "$value" = '""' ] && isempty=1
-        ;;
-    esac
-    [ "$value" = '' ] && return
-    [ "$NO_HEAD" -eq 1 ] && [ -z "$jpath" ] && return
-
-    [ "$LEAFONLY" -eq 0 ] && [ "$PRUNE" -eq 0 ] && print=1
-    [ "$LEAFONLY" -eq 1 ] && [ "$isleaf" -eq 1 ] && [ $PRUNE -eq 0 ] && print=1
-    [ "$LEAFONLY" -eq 0 ] && [ "$PRUNE" -eq 1 ] && [ "$isempty" -eq 0 ] && print=1
-    [ "$LEAFONLY" -eq 1 ] && [ "$isleaf" -eq 1 ] && \
-    [ $PRUNE -eq 1 ] && [ $isempty -eq 0 ] && print=1
-    [ "$print" -eq 1 ] && printf "[%s]\t%s\n" "$jpath" "$value"
-    :
-}
-
-function json_parse() {
-    read -r token
-    json_parse_value
-    read -r token
-    case "$token" in
-        '') ;;
-        *) json_throw "EXPECTED EOF GOT $token" ;;
-    esac
-}
-
-function json_main() {
-    json_parse_env
-    json_parse_options "$@"
-    json_tokenize | json_parse
-}
-
 
 function get_json_from_file() {
 	local SOURCE_FILE_NAME=$1
@@ -232,13 +22,9 @@ function get_json_from_file() {
 		| sed "s/^[ ][ ]*\|^[\t][\t]*//g" >"${TEMP_DIR}/source_trim_left.txt"
 
 	# get END_POSITION
-    cat "${TEMP_DIR}/source_trim_left.txt" | jq  2>/dev/null >"${YOUTUBE_JSON}"
+    cat "${TEMP_DIR}/source_trim_left.txt" | jq -r '.' 2>/dev/null >"${YOUTUBE_JSON}"
 
     if [[ $(cat "${YOUTUBE_JSON}" | wc -l) -gt 0 ]]; then return 0; else return 1; fi
-}
-
-function urldecode() {
-    awk -niord '{printf RT?$0chr("0x"substr(RT,2)):$0}' RS=%.. | sed "s/\\\u0026/\&/g"
 }
 
 function file_ext_map() {
@@ -250,34 +36,6 @@ audio/webm  .audio.webm
 video/mp4   .m4v
 video/webm  .video.webm
 EOF
-}
-
-function file_join_by_col() {
-	local FILE_JOIN="${TEMP_DIR}/file_joined.txt"
-	local JOIN_FINAL="${TEMP_DIR}/join_final.txt"
-	local ARGS=$#
-	local i=1
-
-	rm -rf "${FILE_JOIN}"
-	rm -rf "${JOIN_FINAL}"
-
-
-	if [[ ${ARGS} -eq 0 ]]; then exit; fi
-	while [[ ${i} -le ${ARGS} ]]
-	do
-		ARG=$(eval echo '$'"${i}")
-
-		if [[ ! -s "${FILE_JOIN}" || ! -e "${FILE_JOIN}" ]]; then
-			cp -f "${ARG}" ${FILE_JOIN}
-			let i++
-			continue
-		fi
-
-		awk 'NR==FNR{a[$1]=$2;next} NR>FNR{if($1 in a)print $0, "\t",a[$1]; else print $0, "\t", "N/A"}' "${ARG}" "${FILE_JOIN}" >"${JOIN_FINAL}"
-
-		cp -f "${JOIN_FINAL}" "${FILE_JOIN}"
-		let i++
-	done
 }
 
 function youtube_header() {
@@ -339,44 +97,16 @@ function youtube_parse() {
     if [[ $? -ne 0 ]]; then exit; fi
 
     # 获取视频名称和简介
-    VIDEO_TITLE=$(json_main -l <"${YOUTUBE_JSON}" | grep \"videoDetails\" \
-                | grep \"title\" | awk -F"\t" '{print $(NF)}')
-    VIDEO_DESC=$(json_main -l <"${YOUTUBE_JSON}" | grep \"videoDetails\" \
-                | grep \"shortDescription\" | awk -F "\t" '{print $(NF)}')
+    VIDEO_TITLE=$(jq -r '.videoDetails.title' <"${YOUTUBE_JSON}")
+    VIDEO_DESC=$(jq -r '.videoDetails.shortDescription' <"${YOUTUBE_JSON}")
 
-    # 获取URL_LIST
-    json_main -l <"${YOUTUBE_JSON}"| grep \"streamingData\" | grep \"adaptiveFormats\" \
-        | grep \"url\" | awk -F "\\\[\"streamingData\",\"adaptiveFormats\"," '{print $(NF)}' \
-        | sed "s/,\"url\"]//g" | sed "s/\\\\u0026/\&/g" >${TEMP_DIR}/url_list.txt
-
-    # 获取MIME_TYPE
-    json_main -l <"${YOUTUBE_JSON}" | grep \"streamingData\" | grep \"adaptiveFormats\" \
-        | grep -Ei "(\"video/|\"audio/)" | awk -F "\\\[\"streamingData\",\"adaptiveFormats\"," '{print $(NF)}' \
-        | sed "s/,\"mimeType\"\\]\|\"\|\\\//g" | sed "s/;/\\t/g" >${TEMP_DIR}/mime_type.txt
-
-    # 获取QUALITY_LABEL
-    json_main -l <"${YOUTUBE_JSON}"| grep \"streamingData\" | grep \"adaptiveFormats\"  \
-        | grep -i "\"qualityLabel\"" | awk -F "\\\[\"streamingData\",\"adaptiveFormats\"," '{print $(NF)}'  \
-        | sed "s/,\"qualityLabel\"\]\|\"//g" >${TEMP_DIR}/qulit_label.txt
-
-    # 获取码率
-    json_main -l <"${YOUTUBE_JSON}"| grep \"streamingData\" | grep \"adaptiveFormats\" \
-        | grep -i "\"bitrate\"" | awk -F "\\\[\"streamingData\",\"adaptiveFormats\"," '{print $(NF)}' \
-        | sed "s/,\"bitrate\"\]\|\"//g" >${TEMP_DIR}/bitrate.txt
-
-    # 获取文件大小
-    json_main -l <"${YOUTUBE_JSON}"| grep \"streamingData\" | grep \"adaptiveFormats\" \
-        | grep -i "\"contentLength\""  | awk -F "\\\[\"streamingData\",\"adaptiveFormats\"," '{print $(NF)}' \
-        | sed "s/,\"contentLength\"\]\|\"//g" >${TEMP_DIR}/contentLength.txt
-
-    # 合并
-    file_join_by_col \
-        "${TEMP_DIR}/mime_type.txt" \
-        "${TEMP_DIR}/qulit_label.txt" \
-        "${TEMP_DIR}/bitrate.txt" \
-        "${TEMP_DIR}/contentLength.txt" \
-        "${TEMP_DIR}/url_list.txt"
-
+    jq -rn '["itag", "mimeType","qualityLabel","bitrate","contentLength", "url"] as $fields
+        | (
+            $fields,
+            ($fields | map(length*"-")),
+            (inputs | .streamingData.adaptiveFormats[] | [.itag, .mimeType, .qualityLabel, .bitrate, .contentLength, .url])
+        ) | @tsv' <${YOUTUBE_JSON} \
+        >"${TEMP_DIR}/join_final.txt"
 
     if [[ -z "$(cat "${TEMP_DIR}/join_final.txt")" ]];then
         echo -e "解析音视频信息失败, 退出！"
@@ -389,7 +119,7 @@ function youtube_parse() {
         echo -e "视频描述： ${VIDEO_DESC}"
         echo
         echo -e "${VIDEO_TITLE}" | sed "s/^\"//g" | sed "s/\"$//g" \
-            | urldecode >${TEMP_DIR}/video_title.txt
+            >${TEMP_DIR}/video_title.txt
     fi
 
 }
@@ -406,17 +136,17 @@ function youtube_select_video() {
     rm -f ${SELECTED_URL}
     # select video
     echo -e "请选择你要下载的视频"
-    printf "序号%2s\t文件类型%-12s\t编码方式%-32s\t解析度%-9s\t码率%14s\t文件大小%-10s\n"
+    printf "标识%2s\t文件类型 & 编码方式%-50s\t解析度%9s\t码率%14s\t文件大小%10s\n"
     cat "${YOUTUBE_DL_LIST}" \
-        | awk -F"\t" '{printf "%6s %-20s %-40s %17s %16.2f kbps %16.2f MB\n",$1,$2,$3,$4,$5/1024,$6/1024/1024}' \
+        | awk -F"\t" '{printf "%-6s %-60s %17s %16.2f kbps %16.2f MB\n",$1,$2,$3,$4/1024,$5/1024/1024}' \
         | awk '{if($2~"video") print $0}'
-    read -p  '选择序号: ' VIDEO_SELECT
+    read -p  '选择标识号: ' VIDEO_SELECT
     if [[ -z ${VIDEO_SELECT} ]]; then
         echo -e "无效的选择"
         exit
     fi
     SELECTED_RESOLUTION=$(cat "${YOUTUBE_DL_LIST}" | awk '{if($2~"video") print $0}' \
-        | grep "^${VIDEO_SELECT}[ ]*" | awk '{print $4}')
+        | grep "^${VIDEO_SELECT}[ ]*" | awk -F "\t" '{print $3}')
     if [[ -z ${SELECTED_RESOLUTION} ]]; then
         echo -e "无效的选择"
         exit
@@ -429,17 +159,17 @@ function youtube_select_video() {
 
     # select audio
     echo -e "请选择你要下载的音频"
-    printf "序号%2s\t文件类型%-12s\t编码方式%-32s\t解析度%-9s\t码率%14s\t文件大小%-10s\n"
+    printf "标识%2s\t文件类型 & 编码方式%-50s\t解析度%9s\t码率%14s\t文件大小%10s\n"
     cat "${YOUTUBE_DL_LIST}" \
-        | awk -F"\t" '{printf "%6s %-20s %-40s %17s %16.2f kbps %16.2f MB\n",$1,$2,$3,$4,$5/1024,$6/1024/1024}' \
+        | awk -F"\t" '{printf "%-6s %-60s %17s %16.2f kbps %16.2f MB\n",$1,$2,$3,$4/1024,$5/1024/1024}' \
         | awk '{if($2~"audio") print $0}'
-    read -p  '选择序号: ' AUDIO_SELECT
+    read -p  '选择标识号: ' AUDIO_SELECT
     if [[ -z "${AUDIO_SELECT}" ]]; then
         echo -e "无效的选择"
         exit
     fi
     SELECTED_RATE=$(cat "${YOUTUBE_DL_LIST}" | awk '{if($2~"audio") print $0}' \
-        | grep "^${AUDIO_SELECT}[ ]*" | awk '{print $5}')
+        | grep "^${AUDIO_SELECT}[ ]*" | awk -F "\t" '{print $4}')
     if [[ -z "${SELECTED_RATE}" ]]; then
         echo -e "无效的选择"
         exit
@@ -475,7 +205,7 @@ function youtube_multi_thread_download() {
     local MIN_RANGE
     local MAX_RANGE
     local DISIRED_SIZE
-    local DL_SIZE
+    local DL_SIZE=0
     local END_TIME
     local DURATION
     local SPEED
@@ -515,14 +245,16 @@ function youtube_multi_thread_download() {
 	i=1
 	while [[ ${i} -le ${THREAD_NUMBER} ]]
 	do
+        MIN_RANGE=$((${i} * ${BASE_SIZE} - ${BASE_SIZE}))
+        MAX_RANGE=$((${MIN_RANGE} + ${BASE_SIZE} - 1 ))
+        if [[ ${i} -eq ${THREAD_NUMBER} ]]; then
+            MAX_RANGE=${TOTAL_SIZE}
+            DISIRED_SIZE=$((${TOTAL_SIZE}-${MIN_RANGE}))
+        else
+            DISIRED_SIZE=$((${MAX_RANGE}-${MIN_RANGE}+1))
+        fi
+
 		{
-		MIN_RANGE=$((${i} * ${BASE_SIZE} - ${BASE_SIZE}))
-		MAX_RANGE=$((${MIN_RANGE} + ${BASE_SIZE} - 1 ))
-
-		if [[ ${i} -eq ${THREAD_NUMBER} ]]; then
-			MAX_RANGE=${TOTAL_SIZE}
-		fi
-
         if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
 		    curl -x "${PROXY}" --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
                 -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
@@ -577,23 +309,24 @@ function youtube_multi_thread_download() {
             printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
             
             # parse download progress percentage
-            j=$(cat "${SPLIT_LOG_FOLDER}/${i}.log" 2>/dev/null \
-                | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
-                | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $1}')
-            if [[ $? -ne 0 ]]; then
-                # log日志存在，则判断curl进程是否退出，未退出则轮询等待
-                kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
-                if [[ $? -eq 0 ]]; then
-                    sleep 1
-                    let n++
-                    continue
-                fi
+            # j=$(cat "${SPLIT_LOG_FOLDER}/${i}.log" 2>/dev/null \
+            #     | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
+            #     | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $1}')
+            
+            if [[ -s "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" ]]; then
+                # echo "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 
+                DL_SIZE=$(du -b -d 1 "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $1}')
+                j=$(( 100 * ${DL_SIZE} / ${DISIRED_SIZE} ))
+            else
+                j=0
+                let n++
+                sleep 1
             fi
 
             DL_SPEED=$(cat "${SPLIT_LOG_FOLDER}/${i}.log" 2>/dev/null \
                 | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
                 | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $(NF) "/s"}')
-
+            # echo DL_SPEED:$DL_SPEED DL_SIZE:$DL_SIZE TOTAL_SIZE:$TOTAL_SIZE j:${j}
             if [[ ${j} -eq ${m} ]]; then
                 # 如下载进度没有变化，则轮询等待
                 kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
@@ -611,24 +344,17 @@ function youtube_multi_thread_download() {
             # exit if task completed
             kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
             if [[ $? -ne 0 ]]; then
-                MIN_RANGE=$((${i} * ${BASE_SIZE} - ${BASE_SIZE}))
-                MAX_RANGE=$((${MIN_RANGE} + ${BASE_SIZE} - 1 ))
-                if [[ ${i} -eq ${THREAD_NUMBER} ]]; then
-                    MAX_RANGE=${TOTAL_SIZE}
-                    DISIRED_SIZE=$((${TOTAL_SIZE}-${MIN_RANGE}))
-                else
-                    DISIRED_SIZE=$((${MAX_RANGE}-${MIN_RANGE}+1))
-                fi
-                b=$(printf %100s | tr ' ' '#')
-                DL_SIZE=$(ls "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" -l | awk '{print $5}')
-
-                if [[ ${DL_SIZE} -eq ${DISIRED_SIZE} ]]; then
-                    j="$((${DL_SIZE}/${DISIRED_SIZE}*100))"
+                sleep 1
+                DL_SIZE=$(du -b -d 1 "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $1}')
+                if [[ ${DL_SIZE} -ge ${DISIRED_SIZE} ]]; then
+                    j=$((100 * ${DL_SIZE} / ${DISIRED_SIZE}))
+                    b=$(printf %100s | tr ' ' '#')
                     printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
                     break
                 else
-                    echo "block [${i}] 下载不完全，重试【${retry}】"
+                    echo "block [${i}] 超时退出未完成，重试【${retry}】..."
                     rm -f "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}"
+                    {
                     if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
                         curl -x "${PROXY}" --connect-timeout 60 -L -H  @"${HEADER}" --parallel --parallel-immediate \
                             -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
@@ -638,12 +364,14 @@ function youtube_multi_thread_download() {
                             -k -C - -r "${MIN_RANGE}-${MAX_RANGE}" "${REMOTE_FILE}" \
                             -o "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 2>"${SPLIT_LOG_FOLDER}/${i}.log"
                     fi
+                    }&
                     echo "$!" >"${PID_FOLDER}/${i}.pid"
                     n=0
                     let retry++
+                    echo
                 fi
             fi
-
+            sleep 1
         done
         echo
         }&
@@ -737,19 +465,17 @@ function youtube_download() {
 
     # 多线程下载
     echo "开始下载视频文件"
-    DL_URL=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"video") print $0}' \
-        | awk '{print $(NF)}' | sed "s/^\"\|\"$//g" | urldecode)
-    BITRATES=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"video") print $0}' | awk '{print $5}')
-    MIME_TYPE=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"video") print $0}' | awk '{print $2}')
+    DL_URL=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"video") print $(NF)}' | sed "s/^\"\|\"$//g" )
+    BITRATES=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"video") print $4}')
+    MIME_TYPE=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"video") print $2}' | awk -F ";" '{print $1}')
     FILE_EXT=$(grep "${MIME_TYPE}" "${TEMP_DIR}/file_ext_map.txt" | awk '{print $(NF)}')
     FILE_NAME_VIDEO="${DL_FOLDER}/$(cat "${TEMP_DIR}/video_title.txt")_${BITRATES}${FILE_EXT}"
     youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_VIDEO}" "${THREAD_NUMBER}"
 
     echo "开始下载音频文件"
-    DL_URL=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"audio") print $0}' \
-        | awk '{print $(NF)}' | sed "s/^\"\|\"$//g" | urldecode)
-    BITRATES=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"video") print $0}' | awk '{print $5}')
-    MIME_TYPE=$(cat ${TEMP_DIR}/selected_url.txt | awk '{if($2~"audio") print $0}' | awk '{print $2}')
+    DL_URL=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"audio") print $(NF)}' | sed "s/^\"\|\"$//g" )
+    BITRATES=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"audio") print $4}')
+    MIME_TYPE=$(cat "${TEMP_DIR}/selected_url.txt" | awk -F "\t" '{if($2~"audio") print $2}' | awk -F ";" '{print $1}')
     FILE_EXT=$(grep "${MIME_TYPE}" "${TEMP_DIR}/file_ext_map.txt" | awk '{print $(NF)}')
     FILE_NAME_AUDIO="${DL_FOLDER}/$(cat "${TEMP_DIR}/video_title.txt")_${BITRATES}${FILE_EXT}"
     youtube_multi_thread_download "${DL_URL}" "${TEMP_DIR}/header.txt" "${FILE_NAME_AUDIO}" "${THREAD_NUMBER}"
