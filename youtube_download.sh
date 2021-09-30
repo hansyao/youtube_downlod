@@ -4,7 +4,7 @@
 URL_YOUTUBE=$(echo -e "$1")
 if [[ -z $2 ]]; then DL_FOLDER=`pwd`; else DL_FOLDER="$2"; fi
 if [[ -z $3 ]]; then THREAD_NUMBER=10; else THREAD_NUMBER=$3; fi
-PROXY_ENABLED=no
+PROXY_ENABLED=yes
 PROXY='socks5h://192.168.50.1:23456'
 
 TEMP_DIR='/tmp/tmp_youtube'
@@ -199,7 +199,6 @@ function youtube_multi_thread_download() {
     local TOTAL_SIZE
     local START_TIME
     local BASE_SIZE
-    local LAST_SIZE
     local i
     local p
     local MIN_RANGE
@@ -240,18 +239,18 @@ function youtube_multi_thread_download() {
 	echo -e "开始开启 ${THREAD_NUMBER} 个线程进行分块下载..."
     START_TIME=$(date -u +%s)
 	# split range base on file bytes
-	BASE_SIZE=$((${TOTAL_SIZE} / ${THREAD_NUMBER}))
-	LAST_SIZE=$((${TOTAL_SIZE} - ${BASE_SIZE} * $((${THREAD_NUMBER} - 1))))
+    BASE_SIZE=$(awk 'BEGIN{print "'${TOTAL_SIZE}'" / "'${THREAD_NUMBER}'"}')
+	# LAST_SIZE=$((${TOTAL_SIZE} - ${BASE_SIZE} * $((${THREAD_NUMBER} - 1))))
 	i=1
 	while [[ ${i} -le ${THREAD_NUMBER} ]]
 	do
-        MIN_RANGE=$((${i} * ${BASE_SIZE} - ${BASE_SIZE}))
-        MAX_RANGE=$((${MIN_RANGE} + ${BASE_SIZE} - 1 ))
+        MIN_RANGE=$(awk 'BEGIN{print "'${i}'" * "'${BASE_SIZE}'" - "'${BASE_SIZE}'"}')
+        MAX_RANGE=$(awk 'BEGIN{print "'${MIN_RANGE}'" + "'${BASE_SIZE}'" -1 }')
         if [[ ${i} -eq ${THREAD_NUMBER} ]]; then
             MAX_RANGE=${TOTAL_SIZE}
-            DISIRED_SIZE=$((${TOTAL_SIZE}-${MIN_RANGE}))
+            DISIRED_SIZE=$(awk 'BEGIN{print "'${TOTAL_SIZE}'" - "'${MIN_RANGE}'"}')
         else
-            DISIRED_SIZE=$((${MAX_RANGE}-${MIN_RANGE}+1))
+            DISIRED_SIZE=$(awk 'BEGIN{print "'${MAX_RANGE}'" - "'${MIN_RANGE}'" + 1}')
         fi
 
 		{
@@ -291,23 +290,11 @@ function youtube_multi_thread_download() {
         b=''
         j=0     # download percentage
         m=0     # download percentage (previously)
-        n=0     # waiting seconds
         retry=1 # 重试
         DL_SPEED=0  # download speed
         while :
         do
-            if [[ ${n} -gt 60 ]]; then
-                kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
-                if [[ $? -eq 0 ]]; then
-                    # 只要 curl 进程未退出则轮询等待"
-                    sleep 1
-                    n=0
-                    continue
-                fi
-            fi
 
-            printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
-            
             # parse download progress percentage
             # j=$(cat "${SPLIT_LOG_FOLDER}/${i}.log" 2>/dev/null \
             #     | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
@@ -315,11 +302,10 @@ function youtube_multi_thread_download() {
             
             if [[ -s "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" ]]; then
                 # echo "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 
-                DL_SIZE=$(du -b -d 1 "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $1}')
-                j=$(( 100 * ${DL_SIZE} / ${DISIRED_SIZE} ))
+                DL_SIZE=$(ls -l "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $5}')
+                j=$(awk 'BEGIN{print  int(100 * "'${DL_SIZE}'" / "'${DISIRED_SIZE}'")}')
             else
                 j=0
-                let n++
                 sleep 1
             fi
 
@@ -327,27 +313,27 @@ function youtube_multi_thread_download() {
                 | tr '\r' '\n' |  tail -n 1 | sed "s/[ ][ ]*/\t/g" \
                 | sed "s/^\t//g" | grep "^[0-9]" | awk '{print $(NF) "/s"}')
             # echo DL_SPEED:$DL_SPEED DL_SIZE:$DL_SIZE TOTAL_SIZE:$TOTAL_SIZE j:${j}
-            if [[ ${j} -eq ${m} ]]; then
+            if [[ "${j}" == "${m}" ]]; then
                 # 如下载进度没有变化，则轮询等待
                 kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
                 if [[ $? -eq 0 ]]; then
                     # 只要 curl 进程未退出则轮询等待"
                     sleep 1
-                    n=0
                     continue
                 fi
             fi
-            b='#'${b}
+
+            b=$(printf %${j}s | tr ' ' '#')
+            printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
             m=${j}
-            n=0
 
             # exit if task completed
             kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
             if [[ $? -ne 0 ]]; then
                 sleep 1
-                DL_SIZE=$(du -b -d 1 "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $1}')
+                DL_SIZE=$(ls -l "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $5}')
                 if [[ ${DL_SIZE} -ge ${DISIRED_SIZE} ]]; then
-                    j=$((100 * ${DL_SIZE} / ${DISIRED_SIZE}))
+                    j=$(awk 'BEGIN{print int(100 * "'${DL_SIZE}'" / "'${DISIRED_SIZE}'")}')
                     b=$(printf %100s | tr ' ' '#')
                     printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
                     break
@@ -366,7 +352,6 @@ function youtube_multi_thread_download() {
                     fi
                     }&
                     echo "$!" >"${PID_FOLDER}/${i}.pid"
-                    n=0
                     let retry++
                     echo
                 fi
@@ -387,9 +372,10 @@ function youtube_multi_thread_download() {
         rm -rf ${PID_FOLDER}
         rm -rf ${SPLIT_LOG_FOLDER}
 
-        DL_SIZE=$(du -b -d 1 ${TEMP_DIR} | awk '{print $1}')
+        DL_SIZE=$(ls -l "${TEMP_DIR}"/* | awk '{sum += $5};END {print sum}')
+        # DL_SIZE=$(du -b -d 1 ${TEMP_DIR} | awk '{print $1}')
         if [[ -z "${DL_SIZE}" ]]; then echo "获取下载文件大小失败"; fi
-        SPEED=$((${DL_SIZE} / ${DURATION}))
+        SPEED=$(awk 'BEGIN{print "'${DL_SIZE}'" / "'${DURATION}'"}')
         SPEED=$(awk 'BEGIN{print "'${SPEED}'" / 1024 / 1024 " MB/s"}')
         echo -e "全部下载完成， 耗时 ${DURATION} 秒, 总平均下载速度 ${SPEED}"
         cat $(ls -p "${TEMP_DIR}/" | grep -v "/$" | sort -n \
