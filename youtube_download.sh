@@ -4,7 +4,7 @@
 URL_YOUTUBE=$(echo -e "$1")
 if [[ -z $2 ]]; then DL_FOLDER=`pwd`; else DL_FOLDER="$2"; fi
 if [[ -z $3 ]]; then THREAD_NUMBER=10; else THREAD_NUMBER=$3; fi
-PROXY_ENABLED=yes
+PROXY_ENABLED=no
 PROXY='socks5h://192.168.50.1:23456'
 
 TEMP_DIR='/tmp/tmp_youtube'
