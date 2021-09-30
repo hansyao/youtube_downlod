@@ -13,6 +13,4 @@ pure shell script, parse youtube direct link of video/audio files to download an
 ./youtube_download.sh "https://www.youtube.com/watch?v=i82PO2jIdNs" "." 20
 ```
 
-more visible insight, please see the [log](../master/youtube_download.log)
-
 
