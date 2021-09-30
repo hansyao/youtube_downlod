@@ -302,7 +302,7 @@ function youtube_multi_thread_download() {
             
             if [[ -s "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" ]]; then
                 # echo "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" 
-                DL_SIZE=$(ls -l "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $5}')
+                DL_SIZE=$(wc -c < "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}")
                 j=$(awk 'BEGIN{print  int(100 * "'${DL_SIZE}'" / "'${DISIRED_SIZE}'")}')
             else
                 j=0
@@ -331,7 +331,7 @@ function youtube_multi_thread_download() {
             kill -0 $(cat "${PID_FOLDER}/${i}.pid" 2>/dev/null) 2>/dev/null
             if [[ $? -ne 0 ]]; then
                 sleep 1
-                DL_SIZE=$(ls -l "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}" | awk '{print $5}')
+                DL_SIZE=$(wc -c <"${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}")
                 if [[ ${DL_SIZE} -ge ${DISIRED_SIZE} ]]; then
                     j=$(awk 'BEGIN{print int(100 * "'${DL_SIZE}'" / "'${DISIRED_SIZE}'")}')
                     b=$(printf %100s | tr ' ' '#')
