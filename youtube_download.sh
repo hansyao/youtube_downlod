@@ -338,7 +338,7 @@ function youtube_multi_thread_download() {
                     printf "[%s] [%-100s] %d%% %s [%d] \r" "${DL_SPEED}" "${b}" "${j}" " of block" "${i}"
                     break
                 else
-                    echo "block [${i}] 超时退出未完成，重试【${retry}】..."
+                    echo "block [${i}] 线程结束未完成，重试【${retry}】..."
                     rm -f "${TEMP_DIR}/${MIN_RANGE}-${MAX_RANGE}"
                     {
                     if [[ "${PROXY_ENABLED}" == 'yes' ]]; then
